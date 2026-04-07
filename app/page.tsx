@@ -7,6 +7,7 @@ import SystemOverview from '@/components/dashboard/system-overview'
 import MonitoringCharts from '@/components/dashboard/monitoring-charts'
 import AlertsPanel from '@/components/dashboard/alerts-panel'
 import ControlPanel from '@/components/dashboard/control-panel'
+import AIInsights from '@/components/dashboard/ai-insights'
 import HistoricalAnalysis from '@/components/dashboard/historical-analysis'
 import LocationTracker from '@/components/dashboard/location-tracker'
 import DataExport from '@/components/dashboard/data-export'
@@ -39,9 +40,21 @@ export default function Dashboard() {
 
             {/* Real-Time Monitoring Section */}
             {(activeTab === 'monitoring' || activeTab === 'all') && (
+              <div className="space-y-6">
+                <div>
+                  <h2 className="text-2xl font-bold mb-4 text-foreground">Real-Time Monitoring</h2>
+                  <MonitoringCharts />
+                </div>
+                <div>
+                  <AIInsights />
+                </div>
+              </div>
+            )}
+
+            {/* AI Insights Section (standalone) */}
+            {activeTab === 'ai' && (
               <div>
-                <h2 className="text-2xl font-bold mb-4 text-foreground">Real-Time Monitoring</h2>
-                <MonitoringCharts />
+                <AIInsights />
               </div>
             )}
 

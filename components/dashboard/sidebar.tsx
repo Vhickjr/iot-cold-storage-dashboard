@@ -1,4 +1,4 @@
-import { LayoutDashboard, Activity, Zap, AlertCircle, TrendingUp, MapPin, Download, Settings, ChevronLeft } from 'lucide-react'
+import { LayoutDashboard, Activity, Zap, AlertCircle, TrendingUp, MapPin, Download, Settings, ChevronLeft, Brain } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 interface SidebarProps {
@@ -11,6 +11,7 @@ interface SidebarProps {
 const menuItems = [
   { id: 'overview', label: 'System Overview', icon: LayoutDashboard },
   { id: 'monitoring', label: 'Real-Time Monitoring', icon: Activity },
+  { id: 'ai', label: 'AI Insights', icon: Brain },
   { id: 'control', label: 'Control Panel', icon: Zap },
   { id: 'alerts', label: 'Alerts', icon: AlertCircle },
   { id: 'history', label: 'Historical Data', icon: TrendingUp },

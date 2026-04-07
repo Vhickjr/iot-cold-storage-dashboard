@@ -1,4 +1,4 @@
-import { Menu, Bell, User, Power } from 'lucide-react'
+import { Menu, Bell, User, Power, Brain, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 interface HeaderProps {
@@ -24,6 +24,12 @@ export default function Header({ onMenuClick }: HeaderProps) {
       </div>
 
       <div className="flex items-center gap-4">
+        {/* AI Status Badge */}
+        <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-primary/10 border border-primary/30 rounded-lg">
+          <Brain className="w-4 h-4 text-primary animate-pulse" />
+          <span className="text-xs font-semibold text-primary">AI Enabled</span>
+        </div>
+
         {/* System Status */}
         <div className="text-right hidden sm:block">
           <p className="text-sm font-semibold text-foreground">System Status</p>
