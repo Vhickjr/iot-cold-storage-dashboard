@@ -1,16 +1,104 @@
-export default function Home() {
+'use client'
+
+import { useState } from 'react'
+import Header from '@/components/dashboard/header'
+import Sidebar from '@/components/dashboard/sidebar'
+import SystemOverview from '@/components/dashboard/system-overview'
+import MonitoringCharts from '@/components/dashboard/monitoring-charts'
+import AlertsPanel from '@/components/dashboard/alerts-panel'
+import ControlPanel from '@/components/dashboard/control-panel'
+import HistoricalAnalysis from '@/components/dashboard/historical-analysis'
+import LocationTracker from '@/components/dashboard/location-tracker'
+import DataExport from '@/components/dashboard/data-export'
+import UserSection from '@/components/dashboard/user-section'
+
+export default function Dashboard() {
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [activeTab, setActiveTab] = useState('overview')
+
   return (
-    <div className="flex min-h-screen items-center justify-center font-sans">
-      <main className="flex w-full max-w-3xl flex-col items-center gap-8 px-6 py-16 text-center sm:items-start sm:text-left">
-        <div className="flex flex-col gap-4">
-          <h1 className="text-4xl font-bold tracking-tight">
-            coldstorage
-          </h1>
-          <p className="max-w-md text-lg text-muted-foreground">
-            To get started, send a prompt or modify this page directly.
-          </p>
-        </div>
-      </main>
+    <div className="flex h-screen bg-background text-foreground">
+      {/* Sidebar */}
+      <Sidebar open={sidebarOpen} onToggle={setSidebarOpen} activeTab={activeTab} setActiveTab={setActiveTab} />
+
+      {/* Main Content */}
+      <div className="flex flex-col flex-1 overflow-hidden">
+        {/* Header */}
+        <Header onMenuClick={() => setSidebarOpen(!sidebarOpen)} />
+
+        {/* Content Area */}
+        <main className="flex-1 overflow-auto">
+          <div className="p-6 space-y-6">
+            {/* System Overview Section */}
+            {(activeTab === 'overview' || activeTab === 'all') && (
+              <div>
+                <h2 className="text-2xl font-bold mb-4 text-foreground">System Overview</h2>
+                <SystemOverview />
+              </div>
+            )}
+
+            {/* Real-Time Monitoring Section */}
+            {(activeTab === 'monitoring' || activeTab === 'all') && (
+              <div>
+                <h2 className="text-2xl font-bold mb-4 text-foreground">Real-Time Monitoring</h2>
+                <MonitoringCharts />
+              </div>
+            )}
+
+            {/* Control Panel Section */}
+            {(activeTab === 'control' || activeTab === 'all') && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div>
+                  <h2 className="text-2xl font-bold mb-4 text-foreground">Control Panel</h2>
+                  <ControlPanel />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold mb-4 text-foreground">Alerts & Notifications</h2>
+                  <AlertsPanel />
+                </div>
+              </div>
+            )}
+
+            {/* Alerts Section (standalone) */}
+            {activeTab === 'alerts' && (
+              <div>
+                <h2 className="text-2xl font-bold mb-4 text-foreground">Alerts & Notifications</h2>
+                <AlertsPanel />
+              </div>
+            )}
+
+            {/* Historical Analysis Section */}
+            {(activeTab === 'history' || activeTab === 'all') && (
+              <div>
+                <h2 className="text-2xl font-bold mb-4 text-foreground">Historical Data Analysis</h2>
+                <HistoricalAnalysis />
+              </div>
+            )}
+
+            {/* Location Tracking Section */}
+            {(activeTab === 'location' || activeTab === 'all') && (
+              <div>
+                <h2 className="text-2xl font-bold mb-4 text-foreground">Location Tracking</h2>
+                <LocationTracker />
+              </div>
+            )}
+
+            {/* Data Export Section */}
+            {(activeTab === 'export' || activeTab === 'all') && (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div>
+                  <h2 className="text-2xl font-bold mb-4 text-foreground">Data Export</h2>
+                  <DataExport />
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold mb-4 text-foreground">User & Security</h2>
+                  <UserSection />
+                </div>
+              </div>
+            )}
+          </div>
+        </main>
+      </div>
     </div>
-  );
+  )
 }
