@@ -3,16 +3,28 @@
 import React from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { AlertCircle, TrendingUp, Zap, Thermometer, AlertTriangle, CheckCircle, Brain } from 'lucide-react'
+import { TrendingUp, Zap, Thermometer, AlertTriangle, CheckCircle, Brain, Droplets, Sun, Loader2 } from 'lucide-react'
+import { useTelemetryHistory, useTelemetryLatest } from '@/hooks/use-telemetry'
+import { computeStats, zScore, linearRegression, extrapolate, type Point } from '@/lib/analytics'
+import { TEMP_HIGH, TEMP_LOW, BATTERY_LOW } from '@/lib/thresholds'
+import type { TelemetryHistoryPoint } from '@/lib/telemetry'
+
+type MetricKey = 'temperature' | 'humidity' | 'battery' | 'solarPower'
+
+const METRIC_META: Record<MetricKey, { label: string; unit: string; icon: React.ReactNode; range: [number, number] }> = {
+  temperature: { label: 'Temperature', unit: '°C', icon: <Thermometer className="w-4 h-4" />, range: [-5, 15] },
+  battery: { label: 'Battery Level', unit: '%', icon: <Zap className="w-4 h-4" />, range: [0, 100] },
+  solarPower: { label: 'Solar Power Generation', unit: 'W', icon: <Sun className="w-4 h-4" />, range: [0, 500] },
+  humidity: { label: 'Humidity', unit: '%', icon: <Droplets className="w-4 h-4" />, range: [0, 100] },
+}
 
 interface AnomalyAlert {
   id: string
-  type: 'temperature' | 'battery' | 'sensor' | 'consumption'
+  metric: MetricKey
   severity: 'critical' | 'warning' | 'info'
   title: string
   description: string
   confidence: number
-  timestamp: Date
 }
 
 interface RecommendedAction {
@@ -20,11 +32,10 @@ interface RecommendedAction {
   priority: 'high' | 'medium' | 'low'
   action: string
   impact: string
-  estimatedBenefit: string
 }
 
 interface Forecast {
-  metric: string
+  metric: MetricKey
   current: number
   predicted24h: number
   predicted48h: number
@@ -32,102 +43,146 @@ interface Forecast {
   confidence: number
 }
 
+function toPoints(history: TelemetryHistoryPoint[], key: MetricKey): Point[] {
+  const first = history[0]?.timestamp ?? 0
+  return history
+    .filter((p) => p[key] != null)
+    .map((p) => ({ x: (p.timestamp - first) / (60 * 60 * 1000), y: p[key] as number }))
+}
+
+function buildAnomalies(history: TelemetryHistoryPoint[], latest: Record<MetricKey, number | null>): AnomalyAlert[] {
+  const anomalies: AnomalyAlert[] = []
+
+  for (const key of Object.keys(METRIC_META) as MetricKey[]) {
+    const values = history.map((p) => p[key]).filter((v): v is number => v != null)
+    const current = latest[key]
+    if (values.length < 8 || current == null) continue
+
+    const stats = computeStats(values)
+    const z = zScore(current, stats)
+
+    if (Math.abs(z) > 2) {
+      anomalies.push({
+        id: `zscore-${key}`,
+        metric: key,
+        severity: Math.abs(z) > 3 ? 'critical' : 'warning',
+        title: `Unusual ${METRIC_META[key].label} Reading`,
+        description: `Current ${METRIC_META[key].label.toLowerCase()} (${current.toFixed(1)}${METRIC_META[key].unit}) is ${Math.abs(z).toFixed(1)} standard deviations from the recent average (${stats.mean.toFixed(1)}${METRIC_META[key].unit}).`,
+        confidence: Math.min(0.99, 0.5 + Math.abs(z) / 10),
+      })
+    }
+
+    // Rate-of-change check over the most recent quarter of the window
+    const recentSlice = values.slice(-Math.max(4, Math.floor(values.length / 4)))
+    if (recentSlice.length >= 4) {
+      const delta = recentSlice[recentSlice.length - 1] - recentSlice[0]
+      const rateThreshold = key === 'temperature' ? 1.5 : key === 'battery' ? 15 : key === 'humidity' ? 15 : 150
+      if (Math.abs(delta) > rateThreshold) {
+        anomalies.push({
+          id: `rate-${key}`,
+          metric: key,
+          severity: 'warning',
+          title: `Rapid ${METRIC_META[key].label} Change Detected`,
+          description: `${METRIC_META[key].label} moved by ${delta.toFixed(1)}${METRIC_META[key].unit} over the recent readings — faster than the typical pattern for this metric.`,
+          confidence: 0.75,
+        })
+      }
+    }
+  }
+
+  return anomalies
+}
+
+function buildForecasts(history: TelemetryHistoryPoint[], latest: Record<MetricKey, number | null>): Forecast[] {
+  return (Object.keys(METRIC_META) as MetricKey[]).flatMap((key) => {
+    const points = toPoints(history, key)
+    const current = latest[key]
+    if (points.length < 4 || current == null) return []
+
+    const regression = linearRegression(points)
+    const lastX = points[points.length - 1].x
+    const [rangeMin, rangeMax] = METRIC_META[key].range
+    const clamp = (v: number) => Math.max(rangeMin, Math.min(rangeMax, v))
+    // A straight-line fit extrapolated 24-48h out can overshoot wildly for
+    // cyclical metrics like solar power (day/night swings) — clamp to the
+    // metric's physically realistic range so the number stays meaningful.
+    const predicted24h = clamp(extrapolate(regression, lastX + 24))
+    const predicted48h = clamp(extrapolate(regression, lastX + 48))
+
+    const trend = regression.slope > 0.02 ? 'up' : regression.slope < -0.02 ? 'down' : 'stable'
+
+    return [
+      {
+        metric: key,
+        current,
+        predicted24h,
+        predicted48h,
+        trend,
+        confidence: regression.rSquared,
+      },
+    ]
+  })
+}
+
+function buildRecommendations(anomalies: AnomalyAlert[], latest: Record<MetricKey, number | null>): RecommendedAction[] {
+  const recs: RecommendedAction[] = []
+
+  if (latest.temperature != null && latest.temperature >= TEMP_HIGH) {
+    recs.push({
+      id: 'temp-maintenance',
+      priority: 'high',
+      action: 'Inspect Refrigeration System and Door Seals',
+      impact: 'Temperature is at or above the optimal upper threshold — check compressor performance and door seal integrity to bring it back into range.',
+    })
+  }
+
+  if (latest.battery != null && latest.battery < BATTERY_LOW) {
+    recs.push({
+      id: 'battery-charging',
+      priority: latest.battery < BATTERY_LOW / 2 ? 'high' : 'medium',
+      action: 'Review Solar Charging Performance',
+      impact: 'Battery level is below the warning threshold — check panel exposure and charge controller for reduced charging efficiency.',
+    })
+  }
+
+  if (anomalies.some((a) => a.id.startsWith('zscore-humidity') || a.id.startsWith('rate-humidity'))) {
+    recs.push({
+      id: 'humidity-sensor',
+      priority: 'medium',
+      action: 'Calibrate Humidity Sensor',
+      impact: 'Humidity readings are deviating from the recent baseline, which can indicate sensor drift or a door/seal issue.',
+    })
+  }
+
+  if (recs.length === 0) {
+    recs.push({
+      id: 'nominal',
+      priority: 'low',
+      action: 'No Action Needed',
+      impact: 'All monitored metrics are within their normal operating ranges based on recent telemetry.',
+    })
+  }
+
+  return recs
+}
+
 export default function AIInsights() {
-  const anomalies: AnomalyAlert[] = [
-    {
-      id: '1',
-      type: 'temperature',
-      severity: 'warning',
-      title: 'Gradual Temperature Rise Detected',
-      description: 'Temperature has risen 2.3°C in the last 2 hours, which is faster than normal. Possible refrigeration efficiency degradation.',
-      confidence: 0.92,
-      timestamp: new Date(Date.now() - 30 * 60000),
-    },
-    {
-      id: '2',
-      type: 'battery',
-      severity: 'warning',
-      title: 'Unusual Battery Discharge Pattern',
-      description: 'Battery discharge rate is 15% higher than historical average. May indicate increased compressor load.',
-      confidence: 0.87,
-      timestamp: new Date(Date.now() - 45 * 60000),
-    },
-    {
-      id: '3',
-      type: 'sensor',
-      severity: 'info',
-      title: 'Sensor Drift Detected',
-      description: 'Humidity sensor readings show minor calibration drift. Recommended: Perform calibration check within 48 hours.',
-      confidence: 0.78,
-      timestamp: new Date(Date.now() - 2 * 60 * 60000),
-    },
-  ]
+  const { data: history, loading: historyLoading, error: historyError } = useTelemetryHistory('7d')
+  const { data: snapshot, loading: snapshotLoading } = useTelemetryLatest()
 
-  const recommendations: RecommendedAction[] = [
-    {
-      id: '1',
-      priority: 'high',
-      action: 'Schedule Refrigeration System Maintenance',
-      impact: 'Prevent potential system failure and improve efficiency by 8-12%',
-      estimatedBenefit: 'Extend system lifespan by 2-3 years, reduce energy costs by $500-800 annually',
-    },
-    {
-      id: '2',
-      priority: 'high',
-      action: 'Check Door Seals and Insulation',
-      impact: 'Reduce heat infiltration and stabilize temperature control',
-      estimatedBenefit: 'Lower energy consumption by 5-10%, improve product preservation quality',
-    },
-    {
-      id: '3',
-      priority: 'medium',
-      action: 'Calibrate Environmental Sensors',
-      impact: 'Ensure accurate monitoring and prevent false alarms',
-      estimatedBenefit: 'Improve monitoring accuracy to ±0.5°C, reduce alert false positives',
-    },
-    {
-      id: '4',
-      priority: 'medium',
-      action: 'Optimize Solar Charging Schedule',
-      impact: 'Maximize battery charging during peak sunlight hours',
-      estimatedBenefit: 'Increase battery reserve by 15-20%, improve nighttime reliability',
-    },
-  ]
+  const points = history?.points ?? []
+  const latest: Record<MetricKey, number | null> = {
+    temperature: snapshot?.temperature ?? null,
+    humidity: snapshot?.humidity ?? null,
+    battery: snapshot?.battery ?? null,
+    solarPower: snapshot?.solarPower ?? null,
+  }
 
-  const forecasts: Forecast[] = [
-    {
-      metric: 'Temperature (°C)',
-      current: 4.2,
-      predicted24h: 5.1,
-      predicted48h: 5.8,
-      trend: 'up',
-      confidence: 0.89,
-    },
-    {
-      metric: 'Battery Level (%)',
-      current: 68,
-      predicted24h: 72,
-      predicted48h: 65,
-      trend: 'stable',
-      confidence: 0.91,
-    },
-    {
-      metric: 'Power Consumption (kWh)',
-      current: 3.2,
-      predicted24h: 3.5,
-      predicted48h: 3.3,
-      trend: 'up',
-      confidence: 0.85,
-    },
-    {
-      metric: 'Humidity (%)',
-      current: 45,
-      predicted24h: 48,
-      predicted48h: 50,
-      trend: 'up',
-      confidence: 0.82,
-    },
-  ]
+  const loading = historyLoading || snapshotLoading
+
+  const anomalies = points.length ? buildAnomalies(points, latest) : []
+  const forecasts = points.length ? buildForecasts(points, latest) : []
+  const recommendations = points.length ? buildRecommendations(anomalies, latest) : []
 
   const getSeverityColor = (severity: string) => {
     switch (severity) {
@@ -135,10 +190,8 @@ export default function AIInsights() {
         return 'bg-error/10 text-error border-error/30'
       case 'warning':
         return 'bg-warning/10 text-warning border-warning/30'
-      case 'info':
-        return 'bg-info/10 text-info border-info/30'
       default:
-        return 'bg-muted/10 text-muted-foreground border-muted/30'
+        return 'bg-info/10 text-info border-info/30'
     }
   }
 
@@ -148,33 +201,20 @@ export default function AIInsights() {
         return 'bg-error/20 text-error border-error/40'
       case 'medium':
         return 'bg-warning/20 text-warning border-warning/40'
-      case 'low':
-        return 'bg-info/20 text-info border-info/40'
       default:
-        return 'bg-muted/20 text-muted-foreground'
+        return 'bg-info/20 text-info border-info/40'
     }
   }
 
   const getTrendIcon = (trend: string) => {
-    if (trend === 'up') {
-      return <TrendingUp className="w-4 h-4 text-warning" />
-    } else if (trend === 'down') {
-      return <TrendingUp className="w-4 h-4 text-info rotate-180" />
-    }
+    if (trend === 'up') return <TrendingUp className="w-4 h-4 text-warning" />
+    if (trend === 'down') return <TrendingUp className="w-4 h-4 text-info rotate-180" />
     return <div className="w-4 h-4 text-muted-foreground">—</div>
   }
 
-  const getSeverityIcon = (type: string) => {
-    switch (type) {
-      case 'temperature':
-        return <Thermometer className="w-4 h-4" />
-      case 'battery':
-        return <Zap className="w-4 h-4" />
-      case 'sensor':
-        return <AlertCircle className="w-4 h-4" />
-      default:
-        return <AlertTriangle className="w-4 h-4" />
-    }
+  const barWidth = (value: number, metric: MetricKey) => {
+    const [min, max] = METRIC_META[metric].range
+    return Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100))
   }
 
   return (
@@ -185,165 +225,158 @@ export default function AIInsights() {
         <h2 className="text-2xl font-bold text-foreground">AI-Powered Insights</h2>
       </div>
 
-      {/* Anomaly Detection Section */}
-      <Card className="bg-card border-border">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <AlertTriangle className="w-5 h-5 text-warning" />
-            Anomaly Detection
-          </CardTitle>
-          <CardDescription>
-            Machine learning algorithms detect unusual patterns and potential issues
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {anomalies.length > 0 ? (
-            anomalies.map((anomaly) => (
-              <div
-                key={anomaly.id}
-                className={`p-4 rounded-lg border ${getSeverityColor(anomaly.severity)}`}
-              >
-                <div className="flex items-start gap-3">
-                  <div className="flex-shrink-0 mt-0.5">
-                    {getSeverityIcon(anomaly.type)}
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between gap-2 mb-1">
-                      <h4 className="font-semibold text-sm">{anomaly.title}</h4>
-                      <Badge variant="outline" className="text-xs">
-                        {(anomaly.confidence * 100).toFixed(0)}% confidence
-                      </Badge>
+      {loading && !points.length ? (
+        <div className="flex items-center justify-center py-16 text-muted-foreground">
+          <Loader2 className="w-5 h-5 animate-spin mr-2" />
+          Analyzing telemetry history…
+        </div>
+      ) : historyError && !points.length ? (
+        <div className="bg-destructive/10 border border-destructive/30 text-destructive rounded-lg px-4 py-3 text-sm">
+          {historyError}
+        </div>
+      ) : (
+        <>
+          {/* Anomaly Detection Section */}
+          <Card className="bg-card border-border">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-warning" />
+                Anomaly Detection
+              </CardTitle>
+              <CardDescription>
+                Statistical analysis (z-score deviation and rate-of-change) of the last 7 days of telemetry
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {anomalies.length > 0 ? (
+                anomalies.map((anomaly) => (
+                  <div key={anomaly.id} className={`p-4 rounded-lg border ${getSeverityColor(anomaly.severity)}`}>
+                    <div className="flex items-start gap-3">
+                      <div className="flex-shrink-0 mt-0.5">{METRIC_META[anomaly.metric].icon}</div>
+                      <div className="flex-1">
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <h4 className="font-semibold text-sm">{anomaly.title}</h4>
+                          <Badge variant="outline" className="text-xs">
+                            {(anomaly.confidence * 100).toFixed(0)}% confidence
+                          </Badge>
+                        </div>
+                        <p className="text-sm opacity-90">{anomaly.description}</p>
+                      </div>
                     </div>
-                    <p className="text-sm opacity-90">{anomaly.description}</p>
-                    <p className="text-xs opacity-75 mt-2">
-                      Detected {Math.round((Date.now() - anomaly.timestamp.getTime()) / 60000)} minutes ago
-                    </p>
                   </div>
+                ))
+              ) : (
+                <div className="p-4 text-center text-muted-foreground">
+                  No anomalies detected — System operating normally
                 </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Forecast Predictions Section */}
+          <Card className="bg-card border-border">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <TrendingUp className="w-5 h-5 text-primary" />
+                Forecast Predictions
+              </CardTitle>
+              <CardDescription>
+                48-hour linear trend projection from the last 7 days of telemetry
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {forecasts.map((forecast) => (
+                  <div key={forecast.metric} className="p-4 rounded-lg bg-secondary/20 border border-border">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="font-semibold text-sm text-foreground">
+                        {METRIC_META[forecast.metric].label} ({METRIC_META[forecast.metric].unit})
+                      </h4>
+                      <div className="flex items-center gap-2">
+                        {getTrendIcon(forecast.trend)}
+                        <span className="text-xs text-muted-foreground">
+                          R² {forecast.confidence.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs text-muted-foreground">Current</span>
+                        <span className="font-mono font-semibold text-sm text-foreground">
+                          {forecast.current.toFixed(1)}
+                        </span>
+                      </div>
+                      <div className="h-1 bg-muted rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-info"
+                          style={{ width: `${barWidth(forecast.current, forecast.metric)}%` }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 mt-3 pt-3 border-t border-border">
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs text-muted-foreground">24h Forecast</span>
+                        <span className="font-mono font-semibold text-sm text-primary">
+                          {forecast.predicted24h.toFixed(1)}
+                        </span>
+                      </div>
+                      <div className="h-1 bg-muted rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-primary"
+                          style={{ width: `${barWidth(forecast.predicted24h, forecast.metric)}%` }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 mt-3 pt-3 border-t border-border">
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs text-muted-foreground">48h Forecast</span>
+                        <span className="font-mono font-semibold text-sm text-muted-foreground">
+                          {forecast.predicted48h.toFixed(1)}
+                        </span>
+                      </div>
+                      <div className="h-1 bg-muted rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-muted-foreground opacity-50"
+                          style={{ width: `${barWidth(forecast.predicted48h, forecast.metric)}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))
-          ) : (
-            <div className="p-4 text-center text-muted-foreground">
-              No anomalies detected - System operating normally
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            </CardContent>
+          </Card>
 
-      {/* Forecast Predictions Section */}
-      <Card className="bg-card border-border">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <TrendingUp className="w-5 h-5 text-primary" />
-            Forecast Predictions
-          </CardTitle>
-          <CardDescription>
-            48-hour predictions based on historical patterns and current trends
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {forecasts.map((forecast) => (
-              <div key={forecast.metric} className="p-4 rounded-lg bg-secondary/20 border border-border">
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="font-semibold text-sm text-foreground">{forecast.metric}</h4>
-                  <div className="flex items-center gap-2">
-                    {getTrendIcon(forecast.trend)}
-                    <span className="text-xs text-muted-foreground">
-                      {(forecast.confidence * 100).toFixed(0)}% confidence
-                    </span>
+          {/* Recommended Actions Section */}
+          <Card className="bg-card border-border">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CheckCircle className="w-5 h-5 text-success" />
+                Recommended Actions
+              </CardTitle>
+              <CardDescription>Rule-based recommendations derived from current telemetry and detected anomalies</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {recommendations.map((rec) => (
+                <div key={rec.id} className={`p-4 rounded-lg border ${getPriorityColor(rec.priority)}`}>
+                  <div className="flex items-start gap-3">
+                    <Badge variant="secondary" className="mt-1 text-xs">
+                      {rec.priority.charAt(0).toUpperCase() + rec.priority.slice(1)}
+                    </Badge>
+                    <div className="flex-1">
+                      <h4 className="font-semibold text-sm mb-1">{rec.action}</h4>
+                      <p className="text-xs text-foreground">{rec.impact}</p>
+                    </div>
                   </div>
                 </div>
-
-                <div className="space-y-2">
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-muted-foreground">Current</span>
-                    <span className="font-mono font-semibold text-sm text-foreground">
-                      {forecast.current}
-                    </span>
-                  </div>
-                  <div className="h-1 bg-muted rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-info"
-                      style={{ width: `${(forecast.current / 100) * 100}%` }}
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-2 mt-3 pt-3 border-t border-border">
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-muted-foreground">24h Forecast</span>
-                    <span className="font-mono font-semibold text-sm text-primary">
-                      {forecast.predicted24h}
-                    </span>
-                  </div>
-                  <div className="h-1 bg-muted rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-primary"
-                      style={{ width: `${(forecast.predicted24h / 100) * 100}%` }}
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-2 mt-3 pt-3 border-t border-border">
-                  <div className="flex justify-between items-center">
-                    <span className="text-xs text-muted-foreground">48h Forecast</span>
-                    <span className="font-mono font-semibold text-sm text-muted-foreground">
-                      {forecast.predicted48h}
-                    </span>
-                  </div>
-                  <div className="h-1 bg-muted rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-muted-foreground opacity-50"
-                      style={{ width: `${(forecast.predicted48h / 100) * 100}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Recommended Actions Section */}
-      <Card className="bg-card border-border">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <CheckCircle className="w-5 h-5 text-success" />
-            Recommended Actions
-          </CardTitle>
-          <CardDescription>
-            AI-generated maintenance and optimization recommendations
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {recommendations.map((rec) => (
-            <div
-              key={rec.id}
-              className={`p-4 rounded-lg border ${getPriorityColor(rec.priority)}`}
-            >
-              <div className="flex items-start gap-3">
-                <Badge variant="secondary" className="mt-1 text-xs">
-                  {rec.priority.charAt(0).toUpperCase() + rec.priority.slice(1)}
-                </Badge>
-                <div className="flex-1">
-                  <h4 className="font-semibold text-sm mb-1">{rec.action}</h4>
-                  <div className="space-y-1 text-xs">
-                    <p>
-                      <span className="text-muted-foreground">Impact: </span>
-                      <span className="text-foreground">{rec.impact}</span>
-                    </p>
-                    <p>
-                      <span className="text-muted-foreground">Estimated Benefit: </span>
-                      <span className="text-foreground">{rec.estimatedBenefit}</span>
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
+              ))}
+            </CardContent>
+          </Card>
+        </>
+      )}
     </div>
   )
 }

@@ -1,91 +1,43 @@
 'use client'
 
-import { AlertTriangle, AlertCircle, CheckCircle, Clock } from 'lucide-react'
+import { useState } from 'react'
+import { formatDistanceToNow } from 'date-fns'
+import { AlertTriangle, AlertCircle, CheckCircle, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { useSystemAlerts } from '@/hooks/use-alerts'
+import { usePreferences } from '@/hooks/use-preferences'
 
-interface Alert {
-  id: string
-  title: string
-  description: string
-  severity: 'critical' | 'warning' | 'info' | 'resolved'
-  timestamp: string
-  status: 'active' | 'resolved'
-}
-
-const alerts: Alert[] = [
-  {
-    id: '1',
-    title: 'High Temperature Detected',
-    description: 'Temperature has exceeded optimal range. Current: 7.2°C',
-    severity: 'critical',
-    timestamp: '2 minutes ago',
-    status: 'active',
-  },
-  {
-    id: '2',
-    title: 'Battery Low Warning',
-    description: 'Battery level below 30%. Current: 28%',
-    severity: 'warning',
-    timestamp: '1 hour ago',
-    status: 'active',
-  },
-  {
-    id: '3',
-    title: 'Door Left Open',
-    description: 'Cold storage unit door has been open for 5 minutes',
-    severity: 'critical',
-    timestamp: '5 minutes ago',
-    status: 'resolved',
-  },
-  {
-    id: '4',
-    title: 'System Maintenance Complete',
-    description: 'Scheduled maintenance has been successfully completed',
-    severity: 'info',
-    timestamp: '3 hours ago',
-    status: 'resolved',
-  },
-]
-
-function AlertIcon({ severity }: { severity: 'critical' | 'warning' | 'info' | 'resolved' }) {
-  const iconProps = { className: 'w-5 h-5' }
-
-  switch (severity) {
-    case 'critical':
-      return <AlertTriangle {...iconProps} className="text-error" />
-    case 'warning':
-      return <AlertCircle {...iconProps} className="text-warning" />
-    case 'resolved':
-      return <CheckCircle {...iconProps} className="text-success" />
-    case 'info':
-      return <Clock {...iconProps} className="text-info" />
-    default:
-      return null
-  }
+function AlertIcon({ severity }: { severity: 'critical' | 'warning' }) {
+  return severity === 'critical' ? (
+    <AlertTriangle className="w-5 h-5 text-error" />
+  ) : (
+    <AlertCircle className="w-5 h-5 text-warning" />
+  )
 }
 
 export default function AlertsPanel() {
-  const activeAlerts = alerts.filter((a) => a.status === 'active')
-  const resolvedAlerts = alerts.filter((a) => a.status === 'resolved')
+  const { active, history, acknowledge } = useSystemAlerts()
+  const { preferences } = usePreferences()
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+
+  const visibleActive = preferences.notifyCriticalOnly
+    ? active.filter((a) => a.severity === 'critical')
+    : active
 
   return (
     <div className="space-y-6">
       {/* Active Alerts */}
       <div>
         <h3 className="text-lg font-semibold text-foreground mb-4">
-          Active Alerts ({activeAlerts.length})
+          Active Alerts ({visibleActive.length})
         </h3>
         <div className="space-y-3">
-          {activeAlerts.length > 0 ? (
-            activeAlerts.map((alert) => (
+          {visibleActive.length > 0 ? (
+            visibleActive.map((alert) => (
               <div
                 key={alert.id}
                 className={`bg-card border rounded-lg p-4 ${
-                  alert.severity === 'critical'
-                    ? 'border-error'
-                    : alert.severity === 'warning'
-                      ? 'border-warning'
-                      : 'border-info'
+                  alert.severity === 'critical' ? 'border-error' : 'border-warning'
                 }`}
               >
                 <div className="flex gap-3">
@@ -94,24 +46,31 @@ export default function AlertsPanel() {
                   </div>
                   <div className="flex-1">
                     <div className="flex items-start justify-between">
-                      <div>
-                        <h4 className="font-semibold text-foreground">{alert.title}</h4>
-                        <p className="text-sm text-muted-foreground mt-1">{alert.description}</p>
-                      </div>
-                      <span className="text-xs text-muted-foreground whitespace-nowrap ml-2">
-                        {alert.timestamp}
-                      </span>
+                      <h4 className="font-semibold text-foreground">{alert.title}</h4>
                     </div>
+                    {expandedId === alert.id && (
+                      <p className="text-sm text-muted-foreground mt-1">{alert.description}</p>
+                    )}
                     <div className="flex gap-2 mt-3">
-                      <Button size="sm" className="bg-primary text-primary-foreground hover:bg-primary/90">
+                      <Button
+                        size="sm"
+                        onClick={() => acknowledge(alert.id)}
+                        className="bg-primary text-primary-foreground hover:bg-primary/90"
+                      >
                         Acknowledge
                       </Button>
                       <Button
                         size="sm"
                         variant="outline"
+                        onClick={() => setExpandedId(expandedId === alert.id ? null : alert.id)}
                         className="border-border text-foreground hover:bg-secondary"
                       >
                         Details
+                        <ChevronDown
+                          className={`w-3.5 h-3.5 ml-1 transition-transform ${
+                            expandedId === alert.id ? 'rotate-180' : ''
+                          }`}
+                        />
                       </Button>
                     </div>
                   </div>
@@ -128,44 +87,38 @@ export default function AlertsPanel() {
         </div>
       </div>
 
-      {/* Resolved Alerts */}
+      {/* Alert History */}
       <div>
-        <h3 className="text-lg font-semibold text-foreground mb-4">
-          Resolved ({resolvedAlerts.length})
-        </h3>
+        <h3 className="text-lg font-semibold text-foreground mb-4">Recent History</h3>
         <div className="space-y-2 max-h-64 overflow-y-auto">
-          {resolvedAlerts.map((alert) => (
-            <div key={alert.id} className="bg-card border border-border rounded-lg p-3 opacity-75">
-              <div className="flex gap-3 items-start">
-                <div className="flex-shrink-0 mt-0.5">
-                  <CheckCircle className="w-5 h-5 text-success" />
-                </div>
-                <div className="flex-1">
-                  <h4 className="font-semibold text-foreground text-sm">{alert.title}</h4>
-                  <p className="text-xs text-muted-foreground">{alert.timestamp}</p>
+          {history.length > 0 ? (
+            history.map((event, idx) => (
+              <div
+                key={`${event.id}-${event.timestamp}-${idx}`}
+                className="bg-card border border-border rounded-lg p-3 opacity-75"
+              >
+                <div className="flex gap-3 items-start">
+                  <div className="flex-shrink-0 mt-0.5">
+                    {event.event === 'cleared' ? (
+                      <CheckCircle className="w-5 h-5 text-success" />
+                    ) : (
+                      <AlertCircle className="w-5 h-5 text-warning" />
+                    )}
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="font-semibold text-foreground text-sm">
+                      {event.title} {event.event === 'cleared' ? '— resolved' : '— started'}
+                    </h4>
+                    <p className="text-xs text-muted-foreground">
+                      {formatDistanceToNow(event.timestamp, { addSuffix: true })}
+                    </p>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Alert Settings */}
-      <div className="bg-secondary border border-border rounded-lg p-4">
-        <h4 className="font-semibold text-foreground mb-3">Alert Preferences</h4>
-        <div className="space-y-2 text-sm">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" defaultChecked className="rounded" />
-            <span className="text-foreground">Enable Email Notifications</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" defaultChecked className="rounded" />
-            <span className="text-foreground">Enable SMS Alerts</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" className="rounded" />
-            <span className="text-foreground">Critical Only</span>
-          </label>
+            ))
+          ) : (
+            <p className="text-sm text-muted-foreground p-2">No alert history yet.</p>
+          )}
         </div>
       </div>
     </div>

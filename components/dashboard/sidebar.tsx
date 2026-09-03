@@ -1,5 +1,9 @@
+'use client'
+
+import { formatDistanceToNow } from 'date-fns'
 import { LayoutDashboard, Activity, Zap, AlertCircle, TrendingUp, MapPin, Download, Settings, ChevronLeft, Brain } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { useTelemetryLatest } from '@/hooks/use-telemetry'
 
 interface SidebarProps {
   open: boolean
@@ -20,6 +24,9 @@ const menuItems = [
 ]
 
 export default function Sidebar({ open, onToggle, activeTab, setActiveTab }: SidebarProps) {
+  const { data } = useTelemetryLatest()
+  const isSettingsActive = activeTab === 'settings'
+
   return (
     <>
       {/* Sidebar */}
@@ -73,13 +80,25 @@ export default function Sidebar({ open, onToggle, activeTab, setActiveTab }: Sid
         {/* Settings Footer */}
         <div className="p-4 border-t border-sidebar-border space-y-2">
           <Button
+            onClick={() => {
+              setActiveTab('settings')
+              onToggle(false)
+            }}
             variant="ghost"
-            className="w-full justify-start gap-3 text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
+            className={`w-full justify-start gap-3 ${
+              isSettingsActive
+                ? 'bg-sidebar-primary text-sidebar-primary-foreground hover:bg-sidebar-primary'
+                : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground'
+            }`}
           >
             <Settings className="w-5 h-5" />
             <span className="text-sm">Settings</span>
           </Button>
-          <p className="text-xs text-muted-foreground p-2">Last Updated: Now</p>
+          <p className="text-xs text-muted-foreground p-2">
+            {data?.timestamp
+              ? `Last Updated: ${formatDistanceToNow(data.timestamp, { addSuffix: true })}`
+              : 'Last Updated: —'}
+          </p>
         </div>
       </aside>
 

@@ -1,35 +1,105 @@
 'use client'
 
-import { useState } from 'react'
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
-import { Button } from '@/components/ui/button'
+import { useMemo, useState } from 'react'
+import { Loader2 } from 'lucide-react'
+import {
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from 'recharts'
+import { useTelemetryHistory } from '@/hooks/use-telemetry'
+import { mapDateRangeSelection } from '@/lib/telemetry'
 
-const historicalData = [
-  { date: 'Mon', avgTemp: 4.1, maxTemp: 5.2, minTemp: 2.8, uptime: 99.5 },
-  { date: 'Tue', avgTemp: 3.9, maxTemp: 5.0, minTemp: 2.5, uptime: 99.8 },
-  { date: 'Wed', avgTemp: 4.3, maxTemp: 5.5, minTemp: 3.0, uptime: 99.2 },
-  { date: 'Thu', avgTemp: 4.0, maxTemp: 5.1, minTemp: 2.7, uptime: 99.9 },
-  { date: 'Fri', avgTemp: 4.2, maxTemp: 5.3, minTemp: 3.1, uptime: 99.6 },
-  { date: 'Sat', avgTemp: 4.1, maxTemp: 5.2, minTemp: 2.9, uptime: 99.7 },
-  { date: 'Sun', avgTemp: 3.8, maxTemp: 4.9, minTemp: 2.6, uptime: 99.9 },
-]
+function average(values: number[]): number {
+  if (!values.length) return 0
+  return values.reduce((sum, value) => sum + value, 0) / values.length
+}
 
-const batteryUsageData = [
-  { date: 'Mon', charge: 85, discharge: 15 },
-  { date: 'Tue', charge: 88, discharge: 12 },
-  { date: 'Wed', charge: 82, discharge: 18 },
-  { date: 'Thu', charge: 90, discharge: 10 },
-  { date: 'Fri', charge: 86, discharge: 14 },
-  { date: 'Sat', charge: 87, discharge: 13 },
-  { date: 'Sun', charge: 91, discharge: 9 },
-]
+function variance(values: number[]): number {
+  if (values.length < 2) return 0
+  const mean = average(values)
+  return average(values.map((value) => (value - mean) ** 2))
+}
 
 export default function HistoricalAnalysis() {
   const [dateRange, setDateRange] = useState('week')
   const [selectedMetric, setSelectedMetric] = useState('temperature')
+  const historyRange = mapDateRangeSelection(dateRange)
+  const { data, error, loading, refresh } = useTelemetryHistory(historyRange)
+
+  const dailyData = data?.daily ?? []
+
+  const temperatureStats = useMemo(() => {
+    const temps = dailyData.map((day) => day.avgTemp).filter((value) => value > 0)
+    const outOfRange = dailyData.reduce((count, day) => {
+      return count + (day.maxTemp > 6 || day.minTemp < 2 ? 1 : 0)
+    }, 0)
+
+    return {
+      average: average(temps),
+      variance: variance(temps),
+      outOfRange,
+    }
+  }, [dailyData])
+
+  const batteryStats = useMemo(() => {
+    const batteries = dailyData.map((day) => day.avgBattery).filter((value) => value > 0)
+    const avgBattery = average(batteries)
+    const dischargeEstimate = Math.max(0, 100 - avgBattery)
+
+    return {
+      avgCharge: avgBattery,
+      avgDischarge: dischargeEstimate,
+      health: avgBattery >= 70 ? 'Excellent' : avgBattery >= 50 ? 'Good' : 'Fair',
+    }
+  }, [dailyData])
+
+  const batteryUsageData = dailyData.map((day) => ({
+    date: day.date,
+    charge: day.avgBattery,
+    discharge: Math.max(0, 100 - day.avgBattery),
+  }))
+
+  const uptimeData = dailyData.map((day) => ({
+    date: day.date,
+    uptime: day.avgBattery > 15 ? 99.5 + Math.min(day.avgBattery / 100, 0.4) : 95,
+  }))
+
+  if (loading && !dailyData.length) {
+    return (
+      <div className="flex items-center justify-center py-16 text-muted-foreground">
+        <Loader2 className="w-5 h-5 animate-spin mr-2" />
+        Loading historical telemetry…
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-6">
+      <div className="flex items-center justify-between text-sm text-muted-foreground">
+        <span>
+          {data?.source === 'thingsboard'
+            ? 'Historical data from ThingsBoard'
+            : 'Simulated historical telemetry (dev mode)'}
+        </span>
+        <button type="button" onClick={refresh} className="text-primary hover:underline">
+          Refresh
+        </button>
+      </div>
+
+      {error && (
+        <div className="bg-destructive/10 border border-destructive/30 text-destructive rounded-lg px-4 py-3 text-sm">
+          {error}
+        </div>
+      )}
+
       {/* Controls */}
       <div className="bg-card border border-border rounded-lg p-6">
         <h3 className="text-lg font-semibold text-foreground mb-4">Analysis Options</h3>
@@ -67,7 +137,7 @@ export default function HistoricalAnalysis() {
         <div className="bg-card border border-border rounded-lg p-6">
           <h3 className="text-lg font-semibold text-foreground mb-4">Temperature Trends</h3>
           <ResponsiveContainer width="100%" height={400}>
-            <LineChart data={historicalData}>
+            <LineChart data={dailyData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
               <XAxis dataKey="date" stroke="#94a3b8" />
               <YAxis stroke="#94a3b8" />
@@ -110,15 +180,19 @@ export default function HistoricalAnalysis() {
           <div className="grid grid-cols-3 gap-4 mt-6">
             <div className="bg-secondary p-4 rounded-lg">
               <p className="text-sm text-muted-foreground">Average Temperature</p>
-              <p className="text-2xl font-bold text-foreground">4.1°C</p>
+              <p className="text-2xl font-bold text-foreground">
+                {temperatureStats.average.toFixed(1)}°C
+              </p>
             </div>
             <div className="bg-secondary p-4 rounded-lg">
               <p className="text-sm text-muted-foreground">Temperature Variance</p>
-              <p className="text-2xl font-bold text-foreground">0.15°C</p>
+              <p className="text-2xl font-bold text-foreground">
+                {temperatureStats.variance.toFixed(2)}°C
+              </p>
             </div>
             <div className="bg-secondary p-4 rounded-lg">
-              <p className="text-sm text-muted-foreground">Out of Range Events</p>
-              <p className="text-2xl font-bold text-warning">2</p>
+              <p className="text-sm text-muted-foreground">Out of Range Days</p>
+              <p className="text-2xl font-bold text-warning">{temperatureStats.outOfRange}</p>
             </div>
           </div>
         </div>
@@ -142,23 +216,27 @@ export default function HistoricalAnalysis() {
                 }}
               />
               <Legend />
-              <Bar dataKey="charge" stackId="a" fill="#10b981" name="Solar Charge (%)" />
-              <Bar dataKey="discharge" stackId="a" fill="#f59e0b" name="System Discharge (%)" />
+              <Bar dataKey="charge" stackId="a" fill="#10b981" name="Avg Battery Level (%)" />
+              <Bar dataKey="discharge" stackId="a" fill="#f59e0b" name="Estimated Discharge (%)" />
             </BarChart>
           </ResponsiveContainer>
 
           <div className="grid grid-cols-3 gap-4 mt-6">
             <div className="bg-secondary p-4 rounded-lg">
-              <p className="text-sm text-muted-foreground">Avg Daily Charge</p>
-              <p className="text-2xl font-bold text-foreground">86.7%</p>
+              <p className="text-sm text-muted-foreground">Avg Battery Level</p>
+              <p className="text-2xl font-bold text-foreground">
+                {batteryStats.avgCharge.toFixed(1)}%
+              </p>
             </div>
             <div className="bg-secondary p-4 rounded-lg">
-              <p className="text-sm text-muted-foreground">Avg Daily Discharge</p>
-              <p className="text-2xl font-bold text-foreground">13.3%</p>
+              <p className="text-sm text-muted-foreground">Estimated Discharge</p>
+              <p className="text-2xl font-bold text-foreground">
+                {batteryStats.avgDischarge.toFixed(1)}%
+              </p>
             </div>
             <div className="bg-secondary p-4 rounded-lg">
               <p className="text-sm text-muted-foreground">Battery Health</p>
-              <p className="text-2xl font-bold text-success">Excellent</p>
+              <p className="text-2xl font-bold text-success">{batteryStats.health}</p>
             </div>
           </div>
         </div>
@@ -167,12 +245,12 @@ export default function HistoricalAnalysis() {
       {/* System Uptime */}
       {selectedMetric === 'uptime' && (
         <div className="bg-card border border-border rounded-lg p-6">
-          <h3 className="text-lg font-semibold text-foreground mb-4">System Uptime</h3>
+          <h3 className="text-lg font-semibold text-foreground mb-4">System Uptime Estimate</h3>
           <ResponsiveContainer width="100%" height={400}>
-            <LineChart data={historicalData}>
+            <LineChart data={uptimeData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
               <XAxis dataKey="date" stroke="#94a3b8" />
-              <YAxis stroke="#94a3b8" domain={[98, 100]} />
+              <YAxis stroke="#94a3b8" domain={[90, 100]} />
               <Tooltip
                 contentStyle={{
                   backgroundColor: '#1a1f2e',
@@ -186,7 +264,7 @@ export default function HistoricalAnalysis() {
                 type="monotone"
                 dataKey="uptime"
                 stroke="#10b981"
-                name="Uptime (%)"
+                name="Estimated Uptime (%)"
                 strokeWidth={2}
                 isAnimationActive={false}
               />
@@ -196,15 +274,19 @@ export default function HistoricalAnalysis() {
           <div className="grid grid-cols-3 gap-4 mt-6">
             <div className="bg-secondary p-4 rounded-lg">
               <p className="text-sm text-muted-foreground">Average Uptime</p>
-              <p className="text-2xl font-bold text-foreground">99.66%</p>
+              <p className="text-2xl font-bold text-foreground">
+                {average(uptimeData.map((day) => day.uptime)).toFixed(2)}%
+              </p>
             </div>
             <div className="bg-secondary p-4 rounded-lg">
-              <p className="text-sm text-muted-foreground">Downtime This Week</p>
-              <p className="text-2xl font-bold text-foreground">4.8 min</p>
+              <p className="text-sm text-muted-foreground">Days Tracked</p>
+              <p className="text-2xl font-bold text-foreground">{dailyData.length}</p>
             </div>
             <div className="bg-secondary p-4 rounded-lg">
-              <p className="text-sm text-muted-foreground">MTBF</p>
-              <p className="text-2xl font-bold text-success">156 days</p>
+              <p className="text-sm text-muted-foreground">Data Source</p>
+              <p className="text-2xl font-bold text-success">
+                {data?.source === 'thingsboard' ? 'ThingsBoard' : 'Simulated'}
+              </p>
             </div>
           </div>
         </div>

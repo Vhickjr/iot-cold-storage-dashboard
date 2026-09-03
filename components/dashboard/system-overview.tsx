@@ -1,16 +1,14 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { Thermometer, Droplets, Battery, AlertTriangle } from 'lucide-react'
+import { Thermometer, Droplets, Battery, AlertTriangle, Loader2 } from 'lucide-react'
+import { useTelemetryLatest } from '@/hooks/use-telemetry'
 
 interface StatusIndicatorProps {
-  value: number
+  value: number | string
   unit: string
   label: string
   icon: React.ReactNode
   status: 'good' | 'warning' | 'critical'
-  min?: number
-  max?: number
 }
 
 function StatusCard({ value, unit, label, icon, status }: StatusIndicatorProps) {
@@ -27,7 +25,7 @@ function StatusCard({ value, unit, label, icon, status }: StatusIndicatorProps) 
         <p className="text-sm text-muted-foreground mb-1">{label}</p>
         <div className="flex items-baseline gap-2">
           <span className="text-3xl font-bold text-foreground">{value}</span>
-          <span className="text-lg text-muted-foreground">{unit}</span>
+          {unit && <span className="text-lg text-muted-foreground">{unit}</span>}
         </div>
         <p className={`text-xs mt-2 ${status === 'good' ? 'text-success' : status === 'warning' ? 'text-warning' : 'text-error'}`}>
           Status: {status === 'good' ? 'Normal' : status === 'warning' ? 'Warning' : 'Critical'}
@@ -37,61 +35,95 @@ function StatusCard({ value, unit, label, icon, status }: StatusIndicatorProps) 
   )
 }
 
+function formatValue(value: number | null, digits = 1): string {
+  return value === null ? '—' : value.toFixed(digits)
+}
+
 export default function SystemOverview() {
-  const [systemData, setSystemData] = useState({
-    temperature: 4.2,
-    humidity: 65,
-    battery: 78,
-    status: 'running' as const,
-  })
+  const { data, error, loading, refresh } = useTelemetryLatest()
 
-  useEffect(() => {
-    // Simulate real-time updates
-    const interval = setInterval(() => {
-      setSystemData((prev) => ({
-        temperature: prev.temperature + (Math.random() - 0.5) * 0.2,
-        humidity: Math.max(30, Math.min(95, prev.humidity + (Math.random() - 0.5) * 2)),
-        battery: Math.max(0, Math.min(100, prev.battery + (Math.random() - 0.5) * 1)),
-        status: 'running',
-      }))
-    }, 3000)
+  const temperature = data?.temperature ?? null
+  const humidity = data?.humidity ?? null
+  const battery = data?.battery ?? null
+  const systemStatus = data?.systemStatus ?? (temperature !== null ? 'running' : null)
 
-    return () => clearInterval(interval)
-  }, [])
+  const tempStatus =
+    temperature === null ? 'warning' : temperature < 6 && temperature >= 2 ? 'good' : 'critical'
+  const humidityStatus =
+    humidity === null ? 'warning' : humidity > 80 ? 'warning' : humidity < 35 ? 'warning' : 'good'
+  const batteryStatus =
+    battery === null ? 'warning' : battery > 50 ? 'good' : battery > 20 ? 'warning' : 'critical'
+  const systemStatusLabel =
+    systemStatus === null
+      ? '—'
+      : systemStatus.toLowerCase() === 'running'
+        ? 'Running'
+        : systemStatus
+
+  const hasReadings =
+    temperature !== null || humidity !== null || battery !== null || data?.solarPower !== null
+
+  const statusMessage = error
+    ? `Telemetry unavailable: ${error}`
+    : data?.source === 'thingsboard' && !hasReadings
+      ? 'Connected to ThingsBoard — waiting for device telemetry (all values are empty)'
+      : data?.source === 'thingsboard'
+        ? 'Live data from ThingsBoard'
+        : 'Simulated telemetry (dev mode)'
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-      <StatusCard
-        value={Math.round(systemData.temperature * 10) / 10}
-        unit="°C"
-        label="Current Temperature"
-        icon={<Thermometer className="w-6 h-6" />}
-        status={systemData.temperature < 6 ? 'good' : 'critical'}
-      />
+    <div className="space-y-4">
+      {(loading || error || data) && (
+        <div className="flex items-center justify-between text-sm">
+          <div className="flex items-center gap-2 text-muted-foreground">
+            {loading && <Loader2 className="w-4 h-4 animate-spin" />}
+            <span>{statusMessage}</span>
+          </div>
+          {!loading && (
+            <button
+              type="button"
+              onClick={refresh}
+              className="text-primary hover:underline"
+            >
+              Refresh
+            </button>
+          )}
+        </div>
+      )}
 
-      <StatusCard
-        value={Math.round(systemData.humidity)}
-        unit="%"
-        label="Humidity Level"
-        icon={<Droplets className="w-6 h-6" />}
-        status={systemData.humidity > 80 ? 'warning' : 'good'}
-      />
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatusCard
+          value={formatValue(temperature)}
+          unit="°C"
+          label="Current Temperature"
+          icon={<Thermometer className="w-6 h-6" />}
+          status={tempStatus}
+        />
 
-      <StatusCard
-        value={Math.round(systemData.battery)}
-        unit="%"
-        label="Battery Level"
-        icon={<Battery className="w-6 h-6" />}
-        status={systemData.battery > 50 ? 'good' : systemData.battery > 20 ? 'warning' : 'critical'}
-      />
+        <StatusCard
+          value={humidity === null ? '—' : Math.round(humidity).toString()}
+          unit="%"
+          label="Humidity Level"
+          icon={<Droplets className="w-6 h-6" />}
+          status={humidityStatus}
+        />
 
-      <StatusCard
-        value={1}
-        unit=""
-        label="System Status"
-        icon={<AlertTriangle className="w-6 h-6" />}
-        status="good"
-      />
+        <StatusCard
+          value={battery === null ? '—' : Math.round(battery).toString()}
+          unit="%"
+          label="Battery Level"
+          icon={<Battery className="w-6 h-6" />}
+          status={batteryStatus}
+        />
+
+        <StatusCard
+          value={systemStatusLabel}
+          unit=""
+          label="System Status"
+          icon={<AlertTriangle className="w-6 h-6" />}
+          status={systemStatus?.toLowerCase() === 'running' ? 'good' : 'warning'}
+        />
+      </div>
     </div>
   )
 }
