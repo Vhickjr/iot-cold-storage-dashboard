@@ -2,6 +2,8 @@
 
 import { User, Shield, Key, LogOut } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { useAuth } from '@/contexts/auth-context'
+import { tbRoleLabel } from '@/lib/thingsboard'
 
 interface UserRole {
   id: string
@@ -12,33 +14,35 @@ interface UserRole {
 
 const userRoles: UserRole[] = [
   {
-    id: 'admin',
+    id: 'TENANT_ADMIN',
     name: 'Administrator',
     permissions: ['Full system access', 'User management', 'System configuration', 'Data export'],
     icon: <Shield className="w-5 h-5" />,
   },
   {
-    id: 'operator',
+    id: 'CUSTOMER_USER',
     name: 'Operator',
     permissions: ['Monitor system', 'Control operations', 'View alerts', 'Generate reports'],
     icon: <User className="w-5 h-5" />,
   },
-  {
-    id: 'viewer',
-    name: 'Viewer',
-    permissions: ['View dashboards', 'View reports', 'View alerts (read-only)'],
-    icon: <User className="w-5 h-5" />,
-  },
 ]
 
-export default function UserSection() {
-  const currentUser = {
-    name: 'Admin User',
-    email: 'admin@coldstorage.local',
-    role: 'Administrator',
-    lastLogin: '2024-04-07 14:32 UTC',
-    loginAttempts: 0,
-  }
+interface UserSectionProps {
+  onOpenSettings?: () => void
+}
+
+export default function UserSection({ onOpenSettings }: UserSectionProps) {
+  const { user, logout } = useAuth()
+
+  const roleLabel = user ? tbRoleLabel(user.authority) : '—'
+  const initials = user?.name
+    ? user.name
+        .split(' ')
+        .map((n) => n[0])
+        .join('')
+        .slice(0, 2)
+        .toUpperCase()
+    : '?'
 
   return (
     <div className="space-y-6">
@@ -51,22 +55,22 @@ export default function UserSection() {
         <div className="space-y-3">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 bg-primary rounded-full flex items-center justify-center text-primary-foreground font-bold">
-              {currentUser.name.split(' ').map((n) => n[0]).join('')}
+              {initials}
             </div>
             <div>
-              <p className="text-foreground font-semibold">{currentUser.name}</p>
-              <p className="text-sm text-muted-foreground">{currentUser.email}</p>
+              <p className="text-foreground font-semibold">{user?.name ?? '—'}</p>
+              <p className="text-sm text-muted-foreground">{user?.email ?? '—'}</p>
             </div>
           </div>
 
           <div className="bg-secondary p-3 rounded-lg space-y-2">
             <div>
               <p className="text-xs text-muted-foreground">User Role</p>
-              <p className="text-foreground font-semibold">{currentUser.role}</p>
+              <p className="text-foreground font-semibold">{roleLabel}</p>
             </div>
             <div>
-              <p className="text-xs text-muted-foreground">Last Login</p>
-              <p className="text-foreground font-semibold text-sm">{currentUser.lastLogin}</p>
+              <p className="text-xs text-muted-foreground">Authority</p>
+              <p className="text-foreground font-semibold text-sm">{user?.authority ?? '—'}</p>
             </div>
           </div>
         </div>
@@ -79,34 +83,39 @@ export default function UserSection() {
           Available Roles
         </h3>
         <div className="space-y-3">
-          {userRoles.map((role) => (
-            <div
-              key={role.id}
-              className={`border rounded-lg p-4 ${
-                role.name === currentUser.role ? 'border-primary bg-primary/5' : 'border-border'
-              }`}
-            >
-              <div className="flex items-start justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <div className="text-primary">{role.icon}</div>
-                  <h4 className="font-semibold text-foreground">{role.name}</h4>
+          {userRoles.map((role) => {
+            const isCurrentRole =
+              user?.authority === role.id ||
+              (user?.authority === 'SYS_ADMIN' && role.id === 'TENANT_ADMIN')
+            return (
+              <div
+                key={role.id}
+                className={`border rounded-lg p-4 ${
+                  isCurrentRole ? 'border-primary bg-primary/5' : 'border-border'
+                }`}
+              >
+                <div className="flex items-start justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="text-primary">{role.icon}</div>
+                    <h4 className="font-semibold text-foreground">{role.name}</h4>
+                  </div>
+                  {isCurrentRole && (
+                    <span className="text-xs bg-primary text-primary-foreground px-2 py-1 rounded">
+                      Current
+                    </span>
+                  )}
                 </div>
-                {role.name === currentUser.role && (
-                  <span className="text-xs bg-primary text-primary-foreground px-2 py-1 rounded">
-                    Current
-                  </span>
-                )}
+                <ul className="text-sm text-muted-foreground space-y-1 ml-7">
+                  {role.permissions.map((perm, idx) => (
+                    <li key={idx} className="flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 bg-primary rounded-full"></span>
+                      {perm}
+                    </li>
+                  ))}
+                </ul>
               </div>
-              <ul className="text-sm text-muted-foreground space-y-1 ml-7">
-                {role.permissions.map((perm, idx) => (
-                  <li key={idx} className="flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 bg-primary rounded-full"></span>
-                    {perm}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
+            )
+          })}
         </div>
       </div>
 
@@ -117,51 +126,36 @@ export default function UserSection() {
           Security
         </h3>
         <div className="space-y-3">
-          <Button className="w-full justify-start bg-secondary text-foreground hover:bg-secondary/90">
+          <Button
+            onClick={onOpenSettings}
+            className="w-full justify-start bg-secondary text-foreground hover:bg-secondary/90"
+          >
             <Key className="w-4 h-4 mr-2" />
-            Change Password
+            Manage Account & Security
           </Button>
-          <Button className="w-full justify-start bg-secondary text-foreground hover:bg-secondary/90">
-            <Shield className="w-4 h-4 mr-2" />
-            Two-Factor Authentication
-          </Button>
-          <div className="mt-4 p-3 bg-secondary rounded-lg">
-            <p className="text-xs text-muted-foreground">Failed Login Attempts</p>
-            <p className="text-foreground font-semibold mt-1">{currentUser.loginAttempts}</p>
-          </div>
         </div>
       </div>
 
-      {/* Session Management */}
+      {/* Session */}
       <div className="bg-card border border-border rounded-lg p-6">
         <h3 className="text-lg font-semibold text-foreground mb-4">Session</h3>
-        <div className="space-y-2 mb-4">
-          <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">Session Status</span>
-            <span className="text-success font-semibold">Active</span>
-          </div>
-          <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">Session Duration</span>
-            <span className="text-foreground font-semibold">23 minutes</span>
-          </div>
-          <div className="w-full bg-secondary rounded-full h-2">
-            <div className="bg-primary h-2 rounded-full" style={{ width: '65%' }}></div>
-          </div>
+        <div className="flex justify-between text-sm mb-4">
+          <span className="text-muted-foreground">Session Status</span>
+          <span className="text-success font-semibold">Active</span>
         </div>
-        <Button variant="outline" className="w-full border-border text-foreground hover:bg-secondary">
+        <Button
+          variant="outline"
+          className="w-full border-border text-foreground hover:bg-secondary"
+          onClick={logout}
+        >
           <LogOut className="w-4 h-4 mr-2" />
           Logout
         </Button>
       </div>
 
-      {/* Terms & Support */}
-      <div className="text-center text-xs text-muted-foreground space-y-1">
-        <p>© 2024 Cold Storage Control System. All rights reserved.</p>
-        <div className="flex justify-center gap-3">
-          <button className="text-primary hover:underline">Terms of Service</button>
-          <button className="text-primary hover:underline">Privacy Policy</button>
-          <button className="text-primary hover:underline">Support</button>
-        </div>
+      {/* Footer */}
+      <div className="text-center text-xs text-muted-foreground">
+        <p>© {new Date().getFullYear()} Cold Storage Control System. All rights reserved.</p>
       </div>
     </div>
   )

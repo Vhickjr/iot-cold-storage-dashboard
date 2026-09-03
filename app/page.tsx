@@ -12,6 +12,7 @@ import HistoricalAnalysis from '@/components/dashboard/historical-analysis'
 import LocationTracker from '@/components/dashboard/location-tracker'
 import DataExport from '@/components/dashboard/data-export'
 import UserSection from '@/components/dashboard/user-section'
+import SettingsPanel from '@/components/dashboard/settings-panel'
 
 export default function Dashboard() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
@@ -25,13 +26,16 @@ export default function Dashboard() {
       {/* Main Content */}
       <div className="flex flex-col flex-1 overflow-hidden">
         {/* Header */}
-        <Header onMenuClick={() => setSidebarOpen(!sidebarOpen)} />
+        <Header
+          onMenuClick={() => setSidebarOpen(!sidebarOpen)}
+          onNotificationsClick={() => setActiveTab('alerts')}
+        />
 
         {/* Content Area */}
         <main className="flex-1 overflow-auto">
           <div className="p-6 space-y-6">
             {/* System Overview Section */}
-            {(activeTab === 'overview' || activeTab === 'all') && (
+            {activeTab === 'overview' && (
               <div>
                 <h2 className="text-2xl font-bold mb-4 text-foreground">System Overview</h2>
                 <SystemOverview />
@@ -39,7 +43,7 @@ export default function Dashboard() {
             )}
 
             {/* Real-Time Monitoring Section */}
-            {(activeTab === 'monitoring' || activeTab === 'all') && (
+            {activeTab === 'monitoring' && (
               <div className="space-y-6">
                 <div>
                   <h2 className="text-2xl font-bold mb-4 text-foreground">Real-Time Monitoring</h2>
@@ -59,7 +63,7 @@ export default function Dashboard() {
             )}
 
             {/* Control Panel Section */}
-            {(activeTab === 'control' || activeTab === 'all') && (
+            {activeTab === 'control' && (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <div>
                   <h2 className="text-2xl font-bold mb-4 text-foreground">Control Panel</h2>
@@ -81,7 +85,7 @@ export default function Dashboard() {
             )}
 
             {/* Historical Analysis Section */}
-            {(activeTab === 'history' || activeTab === 'all') && (
+            {activeTab === 'history' && (
               <div>
                 <h2 className="text-2xl font-bold mb-4 text-foreground">Historical Data Analysis</h2>
                 <HistoricalAnalysis />
@@ -89,7 +93,7 @@ export default function Dashboard() {
             )}
 
             {/* Location Tracking Section */}
-            {(activeTab === 'location' || activeTab === 'all') && (
+            {activeTab === 'location' && (
               <div>
                 <h2 className="text-2xl font-bold mb-4 text-foreground">Location Tracking</h2>
                 <LocationTracker />
@@ -97,7 +101,7 @@ export default function Dashboard() {
             )}
 
             {/* Data Export Section */}
-            {(activeTab === 'export' || activeTab === 'all') && (
+            {activeTab === 'export' && (
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <div>
                   <h2 className="text-2xl font-bold mb-4 text-foreground">Data Export</h2>
@@ -105,8 +109,16 @@ export default function Dashboard() {
                 </div>
                 <div>
                   <h2 className="text-2xl font-bold mb-4 text-foreground">User & Security</h2>
-                  <UserSection />
+                  <UserSection onOpenSettings={() => setActiveTab('settings')} />
                 </div>
+              </div>
+            )}
+
+            {/* Settings Section */}
+            {activeTab === 'settings' && (
+              <div>
+                <h2 className="text-2xl font-bold mb-4 text-foreground">Settings</h2>
+                <SettingsPanel />
               </div>
             )}
           </div>
